@@ -1,19 +1,19 @@
 package main
 
 import (
-	"github.com/howeyc/fsnotify"
+	_ "errors"
 	"flag"
+	"github.com/howeyc/fsnotify"
 	"log"
-	"strings"
 	"net/url"
+	_ "os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
-	"os/exec"
-	_"errors"
-	_"os"
+	"strings"
 )
 
-var watchedFN = flag.String("file",  "", "This is the file to monitor for changes.")
+var watchedFN = flag.String("file", "", "This is the file to monitor for changes.")
 
 func extractRemoteName(fn string) (string, error) {
 	//read first line of file, strip starting slashes, return it
@@ -26,8 +26,8 @@ func extractRemoteName(fn string) (string, error) {
 func mount(r string) error {
 	//extract relevant information from remote
 	remote, _ := url.Parse(r)
-	username := (* remote.User).Username()
-	password, _ := (* remote.User).Password()
+	username := (*remote.User).Username()
+	password, _ := (*remote.User).Password()
 	auth := ""
 	if len(username) > 0 {
 		auth = username
@@ -64,7 +64,7 @@ func localCopy(main string, remote string) (string, error) {
 	//use the username embedded in "remote" to make a copy of the file locally
 	//sibling to "main", <remote:username>.styl
 	parsed, _ := url.Parse(remote)
-	user := (*(* parsed).User).Username()
+	user := (*(*parsed).User).Username()
 	localFile := filepath.Dir(main) + "/" + user + ".styl"
 	//log.Println("Copies: ", main, localFile)
 	err := (*exec.Command("cp", main, localFile)).Run()
@@ -107,7 +107,7 @@ func fileProcessor(process chan bool, proxy string) chan bool {
 	go func() {
 		for {
 			select {
-			case <- process:
+			case <-process:
 				processFile(proxy)
 				done <- true
 			}
@@ -120,28 +120,28 @@ func main() {
 	log.SetFlags(log.Ltime)
 	flag.Parse()
 	watcher, werr := fsnotify.NewWatcher()
-	
+
 	if werr != nil {
 		log.Fatal(werr)
 	}
-	
+
 	start := make(chan bool)
 	finished := fileProcessor(start, *watchedFN)
-	
+
 	processing := false
 	shouldStart := false
-	
+
 	func() {
 		werr = watcher.Watch(*watchedFN)
 		if werr != nil {
 			log.Fatal(werr)
 		}
-		
+
 		for {
 			select {
-			case ev := <- watcher.Event:
+			case ev := <-watcher.Event:
 				log.Println(ev)
-				if (ev.IsDelete()) {
+				if ev.IsDelete() {
 					watcher.RemoveWatch(*watchedFN)
 					werr = watcher.Watch(*watchedFN)
 					if werr != nil {
@@ -149,7 +149,7 @@ func main() {
 						break
 					}
 				} else {
-					if (processing) {
+					if processing {
 						shouldStart = true
 					} else {
 						shouldStart = false
@@ -157,8 +157,8 @@ func main() {
 						processing = true
 					}
 				}
-			case <- finished:
-				if (shouldStart) {
+			case <-finished:
+				if shouldStart {
 					shouldStart = false
 					start <- true
 					processing = true
@@ -166,14 +166,12 @@ func main() {
 					processing = false
 					shouldStart = false
 				}
-			case err := <- watcher.Error:
+			case err := <-watcher.Error:
 				log.Println("error: ", err)
 				break
 			}
 		}
 	}()
-	
+
 	watcher.Close()
 }
-
-
