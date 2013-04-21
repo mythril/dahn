@@ -102,6 +102,20 @@ func processFile(proxy string) error {
 	return nil
 }
 
+func fileProcessor(process chan bool, proxy string) chan bool {
+	done := make(chan bool)
+	go func() {
+		for {
+			select {
+			case <- process:
+				processFile(proxy)
+				done <- true
+			}
+		}
+	}()
+	return done
+}
+
 func main() {
 	log.SetFlags(log.Ltime)
 	flag.Parse()
@@ -110,6 +124,12 @@ func main() {
 	if werr != nil {
 		log.Fatal(werr)
 	}
+	
+	start := make(chan bool)
+	finished := fileProcessor(start, *watchedFN)
+	
+	processing := false
+	shouldStart := false
 	
 	func() {
 		werr = watcher.Watch(*watchedFN)
@@ -122,15 +142,29 @@ func main() {
 			case ev := <- watcher.Event:
 				log.Println(ev)
 				if (ev.IsDelete()) {
-					//watcher.RemoveWatch(*watchedFN)
+					watcher.RemoveWatch(*watchedFN)
 					werr = watcher.Watch(*watchedFN)
 					if werr != nil {
 						log.Fatal(werr)
 						break
 					}
 				} else {
-					//log.Println("Modified")
-					processFile(*watchedFN)
+					if (processing) {
+						shouldStart = true
+					} else {
+						shouldStart = false
+						start <- true
+						processing = true
+					}
+				}
+			case <- finished:
+				if (shouldStart) {
+					shouldStart = false
+					start <- true
+					processing = true
+				} else {
+					processing = false
+					shouldStart = false
 				}
 			case err := <- watcher.Error:
 				log.Println("error: ", err)
