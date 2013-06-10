@@ -1,19 +1,27 @@
 package main
 
+//potential improvements:
+//backing up the css files before overwriting them
+//backing up the styl files after modification
+//unmount the mount point after 1 hour of inactivity
+
 import (
 	_ "errors"
-	"flag"
+	_"flag"
 	"github.com/howeyc/fsnotify"
 	"log"
 	"net/url"
-	_ "os"
+	"os"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
-var watchedFN = flag.String("file", "", "This is the file to monitor for changes.")
+//var watchedFN = flag.String("file", "", "This is the file to monitor for changes.")
+var watchedFN = os.Args[1]
 
 func extractRemoteName(fn string) (string, error) {
 	//read first line of file, strip starting slashes, return it
@@ -79,10 +87,27 @@ func compile(file string) (string, error) {
 	re, _ := regexp.Compile("(.*)" + filepath.Ext(file) + "$")
 	cssFile := re.FindStringSubmatch(file)[1]
 	cssFile = cssFile + ".css"
-	err := (*exec.Command("stylus", file)).Run()
+	cmd := (*exec.Command("stylus", file))
+	stderr, err1 := cmd.StderrPipe()
+	if err1 != nil {
+		return "", err1
+	}
+	
+	err := cmd.Start()
 	if err != nil {
 		return "", err
 	}
+	
+	go io.Copy(os.Stderr, stderr)
+	broke := cmd.Wait()
+	
+	if broke != nil {
+		log.Println("compile broken.");
+		return "", broke;
+	} else {
+		log.Println("successfully compiled.");
+	}
+	
 	return cssFile, nil
 }
 
@@ -98,7 +123,7 @@ func processFile(proxy string) error {
 	compiledFile, _ := compile(localFN)
 	//log.Println("compiled file: ", compiledFile)
 	remoteCopy(compiledFile, remoteCopyName)
-	log.Println("saved")
+	log.Println("uploaded")
 	return nil
 }
 
@@ -118,7 +143,8 @@ func fileProcessor(process chan bool, proxy string) chan bool {
 
 func main() {
 	log.SetFlags(log.Ltime)
-	flag.Parse()
+	//flag.Parse()
+	log.Println(watchedFN)
 	watcher, werr := fsnotify.NewWatcher()
 
 	if werr != nil {
@@ -126,13 +152,13 @@ func main() {
 	}
 
 	start := make(chan bool)
-	finished := fileProcessor(start, *watchedFN)
+	finished := fileProcessor(start, watchedFN)
 
 	processing := false
 	shouldStart := false
 
 	func() {
-		werr = watcher.Watch(*watchedFN)
+		werr = watcher.Watch(watchedFN)
 		if werr != nil {
 			log.Fatal(werr)
 		}
@@ -142,8 +168,8 @@ func main() {
 			case ev := <-watcher.Event:
 				log.Println(ev)
 				if ev.IsDelete() {
-					watcher.RemoveWatch(*watchedFN)
-					werr = watcher.Watch(*watchedFN)
+					watcher.RemoveWatch(watchedFN)
+					werr = watcher.Watch(watchedFN)
 					if werr != nil {
 						log.Fatal(werr)
 						break
@@ -153,6 +179,7 @@ func main() {
 						shouldStart = true
 					} else {
 						shouldStart = false
+						time.Sleep(time.Duration(50) * time.Millisecond)
 						start <- true
 						processing = true
 					}
