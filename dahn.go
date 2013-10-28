@@ -1,12 +1,11 @@
 package main
 
 //potential improvements:
-//backing up the css files before overwriting them
 //backing up the styl files after modification
 //unmount the mount point after 1 hour of inactivity
 
 import (
-	_ "errors"
+	_"errors"
 	_"flag"
 	"github.com/howeyc/fsnotify"
 	"log"
@@ -14,10 +13,12 @@ import (
 	"os"
 	"io"
 	"os/exec"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
+	"hash/fnv"
 )
 
 //var watchedFN = flag.String("file", "", "This is the file to monitor for changes.")
@@ -49,8 +50,8 @@ func mount(r string) error {
 	return (*exec.Command("gvfs-mount", mountLoc)).Run()
 }
 
-func attemptCopy(local string, remote string) error {
-	return (*exec.Command("gvfs-copy", local, remote)).Run()
+func attemptCopy(src string, target string) error {
+	return (*exec.Command("gvfs-copy", src, target)).Run()
 }
 
 func remoteCopy(local string, remote string) error {
@@ -68,12 +69,19 @@ func remoteCopy(local string, remote string) error {
 	return nil
 }
 
+func hashed(fn string) string {
+	hasher := fnv.New32()
+	hasher.Write([]byte(fn))
+	return fmt.Sprintf("%X", hasher.Sum32())
+}
+
 func localCopy(main string, remote string) (string, error) {
 	//use the username embedded in "remote" to make a copy of the file locally
 	//sibling to "main", <remote:username>.styl
 	parsed, _ := url.Parse(remote)
+	pathHash := hashed(parsed.Path)
 	user := (*(*parsed).User).Username()
-	localFile := filepath.Dir(main) + "/" + user + ".styl"
+	localFile := filepath.Dir(main) + "/" + user + "-" + pathHash + ".styl"
 	//log.Println("Copies: ", main, localFile)
 	err := (*exec.Command("cp", main, localFile)).Run()
 	if err != nil {
