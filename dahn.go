@@ -32,7 +32,7 @@ func extractRemoteName(fn string) (string, error) {
 	return result, err
 }
 
-func mount(r string) error {
+func extractMountPoint(r string) string {
 	//extract relevant information from remote
 	remote, _ := url.Parse(r)
 	username := (*remote.User).Username()
@@ -45,28 +45,22 @@ func mount(r string) error {
 		}
 		auth = auth + "@"
 	}
-	mountLoc := remote.Scheme + "://" + auth + remote.Host
+	return remote.Scheme + "://" + auth + remote.Host
+}
+
+func isMounted(softDevice string) bool {
+	//execute gvfs-mount to validate the mount
+	cmd := fmt.Sprintf("bash -c 'ex=`gvfs-mount -l|grep \"%s\"|wc -l`;echo $((1 - $ex))'", softDevice)
+	return (*exec.Command(cmd)).Run() == nil
+}
+
+func mount(softDevice string) error {
 	//execute gvfs-mount to mount the location
-	return (*exec.Command("gvfs-mount", mountLoc)).Run()
+	return (*exec.Command("gvfs-mount", softDevice)).Run()
 }
 
 func attemptCopy(src string, target string) error {
 	return (*exec.Command("gvfs-copy", src, target)).Run()
-}
-
-func remoteCopy(local string, remote string) error {
-	err := attemptCopy(local, remote)
-	if err != nil {
-		mountErr := mount(remote)
-		if mountErr != nil {
-			return mountErr
-		}
-	}
-	err = attemptCopy(local, remote)
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func hashed(fn string) string {
@@ -119,6 +113,18 @@ func compile(file string) (string, error) {
 	return cssFile, nil
 }
 
+func backupAndMount(remote string) error {
+	mntPoint := extractMountPoint(remote)
+	if isMounted(mntPoint) != true {
+		mountErr := mount(mntPoint)
+		if mountErr != nil {
+			return mountErr
+		}
+		//backupOfRemote(remote)
+	}
+	return nil
+}
+
 func processFile(proxy string) error {
 	//create a proxy file to be watched
 	remoteCopyName, _ := extractRemoteName(proxy)
@@ -130,7 +136,8 @@ func processFile(proxy string) error {
 	//log.Println("local copy: ", localFN)
 	compiledFile, _ := compile(localFN)
 	//log.Println("compiled file: ", compiledFile)
-	remoteCopy(compiledFile, remoteCopyName)
+	backupAndMount(remoteCopyName)
+	attemptCopy(compiledFile, remoteCopyName)
 	log.Println("uploaded")
 	return nil
 }
