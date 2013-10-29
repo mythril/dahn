@@ -5,8 +5,8 @@ package main
 //unmount the mount point after 1 hour of inactivity
 
 import (
-	_"errors"
 	_"flag"
+	"errors"
 	"github.com/howeyc/fsnotify"
 	"log"
 	"net/url"
@@ -50,8 +50,9 @@ func extractMountPoint(r string) string {
 
 func isMounted(softDevice string) bool {
 	//execute gvfs-mount to validate the mount
-	cmd := fmt.Sprintf("bash -c 'ex=`gvfs-mount -l|grep \"%s\"|wc -l`;echo $((1 - $ex))'", softDevice)
-	return (*exec.Command(cmd)).Run() == nil
+	//cmd := fmt.Sprintf("bash -c 'ex=`gvfs-mount -l|grep \"%s\"|wc -l;exit $((1 - $ex))`'", softDevice)
+	out, _ := (*exec.Command("gvfs-mount", "-l")).Output()
+	return strings.Contains(string(out), softDevice)
 }
 
 func mount(softDevice string) error {
@@ -70,13 +71,9 @@ func hashed(fn string) string {
 }
 
 func localCopy(main string, remote string) (string, error) {
-	//use the username embedded in "remote" to make a copy of the file locally
-	//sibling to "main", <remote:username>.styl
 	parsed, _ := url.Parse(remote)
 	pathHash := hashed(parsed.Path)
-	user := (*(*parsed).User).Username()
-	localFile := filepath.Dir(main) + "/" + user + "-" + pathHash + ".styl"
-	//log.Println("Copies: ", main, localFile)
+	localFile := deriveName(localName(main, remote), "", "-" + pathHash, filepath.Ext(main))
 	err := (*exec.Command("cp", main, localFile)).Run()
 	if err != nil {
 		return "", err
@@ -84,11 +81,17 @@ func localCopy(main string, remote string) (string, error) {
 	return localFile, nil
 }
 
+func deriveName(file, prefix, suffix, newExt string) string {
+	base := filepath.Base(file)
+	ext := filepath.Ext(file)
+	re, _ := regexp.Compile("(.*)" + ext + "$");
+	newFn := re.FindStringSubmatch(base)[1]
+	return prefix + newFn + suffix + newExt;
+}
+
 func compile(file string) (string, error) {
 	//run stylus against the file
-	re, _ := regexp.Compile("(.*)" + filepath.Ext(file) + "$")
-	cssFile := re.FindStringSubmatch(file)[1]
-	cssFile = cssFile + ".css"
+	cssFile := deriveName(file, "", "", ".css");
 	cmd := (*exec.Command("stylus", file))
 	stderr, err1 := cmd.StderrPipe()
 	if err1 != nil {
@@ -106,23 +109,46 @@ func compile(file string) (string, error) {
 	if broke != nil {
 		log.Println("compile broken.");
 		return "", broke;
-	} else {
-		log.Println("successfully compiled.");
 	}
 	
+	log.Println("successfully compiled.");
 	return cssFile, nil
 }
 
-func backupAndMount(remote string) error {
+func localName(main, remote string) string {
+	parsed, _ := url.Parse(remote)
+	user := (*(*parsed).User).Username()
+	return filepath.Dir(main) + "/" + user + ".styl"
+}
+
+func createComparableBackup(remote, where string) error {
+	url, _ := url.Parse(remote)
+	fn := (* url).Path
+	baseName := localName(where + "/.", remote)
+	pathHash := hashed(fn)
+	fn = where + "/" + deriveName(baseName, "", "-" + pathHash + "-upstream", filepath.Ext(fn))
+	return attemptCopy(remote, fn)
+}
+
+func backupAndMount(remote, where string) error {
 	mntPoint := extractMountPoint(remote)
 	if isMounted(mntPoint) != true {
+		log.Println("not mounted")
 		mountErr := mount(mntPoint)
 		if mountErr != nil {
 			return mountErr
 		}
-		//backupOfRemote(remote)
+		return createComparableBackup(remote, where)
 	}
+	log.Println("mounted")
 	return nil
+}
+
+func differences(f1, f2 string) (string, bool) {
+	cmd := (*exec.Command("diff", "-C", "5", f1, f2))
+	out, _ := cmd.Output()
+	diff := strings.TrimSpace(string(out))
+	return diff, diff != ""
 }
 
 func processFile(proxy string) error {
@@ -136,10 +162,28 @@ func processFile(proxy string) error {
 	//log.Println("local copy: ", localFN)
 	compiledFile, _ := compile(localFN)
 	//log.Println("compiled file: ", compiledFile)
-	backupAndMount(remoteCopyName)
-	attemptCopy(compiledFile, remoteCopyName)
-	log.Println("uploaded")
-	return nil
+	backupDir, _ := filepath.Abs(filepath.Dir(localFN))
+	backupAndMount(remoteCopyName, backupDir)
+	backupFile := deriveName(compiledFile, "", "-upstream", ".css")
+	if _, ex := os.Stat(backupFile); os.IsNotExist(ex) {
+		attemptCopy(compiledFile, remoteCopyName)
+		os.Remove(compiledFile)
+		log.Println("uploaded")
+		return nil
+	}
+	diff, isDifferent := differences(compiledFile, backupFile);
+	if isDifferent == false {
+		attemptCopy(compiledFile, remoteCopyName)
+		log.Println("uploaded")
+		os.Remove(compiledFile)
+		os.Remove(backupFile)
+		return nil
+	}
+	log.Println("There was an error: an upstream file exists, with differences.")
+	fmt.Println(diff)
+	log.Println(backupFile)
+	log.Println("Please review and delete the file to continue")
+	return errors.New("Upsteam backup detected, please remove to continue. (" + backupFile + ")")
 }
 
 func fileProcessor(process chan bool, proxy string) chan bool {
@@ -148,7 +192,10 @@ func fileProcessor(process chan bool, proxy string) chan bool {
 		for {
 			select {
 			case <-process:
-				processFile(proxy)
+				err := processFile(proxy)
+				if err != nil {
+					log.Println(err)
+				}
 				done <- true
 			}
 		}
@@ -157,6 +204,7 @@ func fileProcessor(process chan bool, proxy string) chan bool {
 }
 
 func main() {
+	//log.SetFlags(log.Ltime | log.Lshortfile)
 	log.SetFlags(log.Ltime)
 	//flag.Parse()
 	log.Println(watchedFN)
