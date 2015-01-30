@@ -33,6 +33,9 @@ func extractRemoteName(fn string) (string, error) {
 }
 
 func extractMountPoint(r string) string {
+	if _, err := os.Stat(r); os.IsNotExist(err) {
+		return r
+	}
 	//extract relevant information from remote
 	remote, _ := url.Parse(r)
 	username := (*remote.User).Username()
@@ -116,6 +119,9 @@ func compile(file string) (string, error) {
 }
 
 func localName(main, remote string) string {
+	if _, err := os.Stat(remote); os.IsNotExist(err) {
+		return remote
+	}
 	parsed, _ := url.Parse(remote)
 	user := (*(*parsed).User).Username()
 	return filepath.Dir(main) + "/" + user + ".styl"
